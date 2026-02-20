@@ -5,11 +5,12 @@ Target: uart_ascii_sender
 Role: Testbench for ASCII Report Generator
 Scenario:
   - Stimulates request inputs for Watch, SR04, DHT11, and Loopback
-  - Assumes TX FIFO is always ready (no full backpressure)
+  - Injects TX FIFO full backpressure window
 CheckPoint:
   - Captures serialized UART output into a log
   - Verifies correct formatting of strings (e.g., "WATCH...", "TEMP...")
   - Checks arbitration priority if multiple requests occur
+  - Checks sender stall behavior while iTxFifoFull is asserted
 [TB_INFO_END]
 */
 
@@ -24,7 +25,7 @@ module tb_uart_ascii_sender;
   reg iClk;
   reg iRst;
 
-  wire iTxFifoFull;
+  reg iTxFifoFull;
   wire [7:0] oTxData;
   wire oTxPushValid;
 
@@ -64,7 +65,6 @@ module tb_uart_ascii_sender;
   );
 
   always #5 iClk = ~iClk;
-  assign iTxFifoFull = 1'b0;
 
   integer i;
   reg [7:0] tx_count;
@@ -134,9 +134,36 @@ module tb_uart_ascii_sender;
     end
   endtask
 
+  task hold_fifo_full_and_check(input integer hold_cycles);
+    integer k;
+    reg [7:0] tx_count_before;
+    begin
+      @(negedge iClk);
+      iTxFifoFull = 1'b1;
+      tx_count_before = tx_count;
+
+      for (k = 0; k < hold_cycles; k = k + 1) begin
+        @(posedge iClk);
+        #1;
+        if (oTxPushValid !== 1'b0) begin
+          $display("oTxPushValid asserted while iTxFifoFull=1 at k=%0d", k);
+          $finish;
+        end
+        if (tx_count !== tx_count_before) begin
+          $display("tx_count changed while iTxFifoFull=1: before=%0d now=%0d", tx_count_before, tx_count);
+          $finish;
+        end
+      end
+
+      @(negedge iClk);
+      iTxFifoFull = 1'b0;
+    end
+  endtask
+
   initial begin
     iClk = 1'b0;
     iRst = 1'b1;
+    iTxFifoFull = 1'b0;
 
     iLoopData = 8'd0;
     iLoopValid = 1'b0;
@@ -162,6 +189,10 @@ module tb_uart_ascii_sender;
     pulse_sr04_report();
     pulse_temp_report();
     pulse_hum_report();
+
+    // Inject backpressure mid-transfer and verify sender stalls.
+    wait (tx_count >= 8'd5);
+    hold_fifo_full_and_check(40);
 
     wait (tx_count == EXP_TX_COUNT);
     repeat (10) @(posedge iClk);

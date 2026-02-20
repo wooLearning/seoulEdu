@@ -1,0 +1,9 @@
+# Track only source/testbench/constraints in this standalone repo.
+/*
+!/.gitignore
+!/src/
+!/src/**
+!/tb/
+!/tb/**
+!/constrs/
+!/constrs/**

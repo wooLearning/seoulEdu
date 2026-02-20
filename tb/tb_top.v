@@ -1,16 +1,19 @@
 /*
 [TB_INFO_START]
-Name: tb_top_smoke
+Name: tb_top
 Target: Top
-Role: System-Level Smoke Test
+Role: System-Level Scenario Test (Case 2~7)
 Scenario:
-  - Integrated simulation of UART, Buttons, and Sensors
-  - Tasks: `send_uart_byte` (Commands), `simulate_sr04_echo_cm`
-  - Simulates full flow: Mode change -> Sensor Request -> Report Generation
+  - Case2: Physical C button -> stopwatch run/stop check
+  - Case3: Physical U/D/L/R/C -> clock edit flow check
+  - Case4: UART toggle command policy check (0/3/5/6/x)
+  - Case5: UART watch report token check ("WATCH")
+  - Case6: SR04 select/start/report path check
+  - Case7: DHT11 select/start/report path check
 CheckPoint:
-  - Monitors UART TX output for correct ASCII reports
-  - Verifies interaction between Control Unit and peripherals
-  - Ensures no deadlock in FSMs
+  - Verify display/mode select policy from control path
+  - Verify sensor data valid/value and UART report token output
+  - Use explicit FAIL prints with $finish for auto-judgement
 [TB_INFO_END]
 */
 
@@ -22,11 +25,10 @@ module tb_top;
     $dumpvars(0, tb_top);
   end
 
-  localparam integer BAUD_RATE = 9600;
-  localparam integer BIT_PERIOD_NS = 1_000_000_000 / BAUD_RATE;
-  localparam integer CLK_PER_US = 100; // 100MHz
+  localparam integer BAUD_RATE      = 9600;
+  localparam integer BIT_PERIOD_NS  = 1_000_000_000 / BAUD_RATE;
+  localparam integer CLK_PER_US     = 100; // 100MHz
   localparam integer START_GUARD_CYC = 2_000_000; // 20ms @100MHz
-  localparam integer WAIT_GUARD_CYC  = 2_000_000; // 20ms @100MHz
 
   reg iClk;
   reg iRst;
@@ -35,6 +37,7 @@ module tb_top;
   reg iSw0, iSw1, iSw2, iSw3;
   reg iBtnC, iBtnU, iBtnD, iBtnL, iBtnR;
   reg iSr04Echo;
+
   reg rDht11DriveLow;
   tri1 ioDht11Data;
   assign ioDht11Data = rDht11DriveLow ? 1'b0 : 1'bz;
@@ -65,7 +68,7 @@ module tb_top;
     .oFndFont(oFndFont)
   );
 
-  // Speed up DHT11 simulation in top smoke.
+  // Speed up DHT11 in top-level simulation.
   defparam dut.u_dht11_controller.START_LOW_MS = 1;
   defparam dut.u_dht11_controller.START_RELEASE_US = 20;
   defparam dut.u_dht11_controller.RESP_TIMEOUT_US = 250;
@@ -73,48 +76,102 @@ module tb_top;
 
   always #5 iClk = ~iClk;
 
-  task send_uart_byte(input [7:0] data);
-    integer i;
-    begin
-      iRx = 1'b0; // start bit
-      #(BIT_PERIOD_NS);
+  integer i;
+  integer rTxCount;
+  reg [7:0] rTxCaptured;
+  reg [7:0] rTxLastByte;
+  reg [7:0] rTxLog [0:1023];
+  event evTxByte;
 
-      for (i = 0; i < 8; i = i + 1) begin
-        iRx = data[i];
+  integer rPrevMin;
+  integer rExpectedMin;
+  integer rPrevSec;
+  integer rExpectedSec;
+  // UART RX stimulus helper (8N1): start(0) + 8 data bits (LSB first) + stop(1).
+  // Adds one extra bit-period as inter-byte gap.
+  task send_uart_byte(input [7:0] data);
+    integer k;
+    begin
+      iRx = 1'b0;
+      #(BIT_PERIOD_NS);
+      for (k = 0; k < 8; k = k + 1) begin
+        iRx = data[k];
         #(BIT_PERIOD_NS);
       end
-
-      iRx = 1'b1; // stop bit
+      iRx = 1'b1;
       #(BIT_PERIOD_NS);
-      #(BIT_PERIOD_NS); // inter-byte gap
+      #(BIT_PERIOD_NS);
     end
   endtask
 
+  // Physical button pulse helper for C button.
+  // 3-cycle high keeps pulse stable through synchronizer stages.
   task press_button_c;
     begin
       @(negedge iClk); iBtnC = 1'b1;
+      repeat (3) @(posedge iClk);
       @(negedge iClk); iBtnC = 1'b0;
     end
   endtask
 
+  // Physical button pulse helper for U button.
+  task press_button_u;
+    begin
+      @(negedge iClk); iBtnU = 1'b1;
+      repeat (3) @(posedge iClk);
+      @(negedge iClk); iBtnU = 1'b0;
+    end
+  endtask
+
+  // Physical button pulse helper for D button.
+  task press_button_d;
+    begin
+      @(negedge iClk); iBtnD = 1'b1;
+      repeat (3) @(posedge iClk);
+      @(negedge iClk); iBtnD = 1'b0;
+    end
+  endtask
+
+  // Physical button pulse helper for L button.
+  task press_button_l;
+    begin
+      @(negedge iClk); iBtnL = 1'b1;
+      repeat (3) @(posedge iClk);
+      @(negedge iClk); iBtnL = 1'b0;
+    end
+  endtask
+
+  // Physical button pulse helper for R button.
+  task press_button_r;
+    begin
+      @(negedge iClk); iBtnR = 1'b1;
+      repeat (3) @(posedge iClk);
+      @(negedge iClk); iBtnR = 1'b0;
+    end
+  endtask
+
+  // SR04 echo model:
+  // waits for DUT trig pulse, then drives echo high for distance_cm * 58us.
   task simulate_sr04_echo_cm(input integer distance_cm);
     begin
       wait(oSr04Trig == 1'b1);
       wait(oSr04Trig == 1'b0);
       #5000;
       iSr04Echo = 1'b1;
-      #(distance_cm * 58_000); // 58us per cm
+      #(distance_cm * 58_000);
       iSr04Echo = 1'b0;
     end
   endtask
 
+  // Time helper in microsecond unit (based on 100MHz clock).
   task wait_us(input integer n_us);
-    integer i;
+    integer k;
     begin
-      for (i = 0; i < (n_us * CLK_PER_US); i = i + 1) @(posedge iClk);
+      for (k = 0; k < (n_us * CLK_PER_US); k = k + 1) @(posedge iClk);
     end
   endtask
 
+  // DHT11 bit model: 50us low + (28us/70us) high for 0/1.
   task dht_send_bit(input bit_value);
     begin
       rDht11DriveLow = 1'b1;
@@ -125,15 +182,18 @@ module tb_top;
     end
   endtask
 
+  // DHT11 byte model: send MSB first.
   task dht_send_byte(input [7:0] byte_value);
-    integer i;
+    integer k;
     begin
-      for (i = 7; i >= 0; i = i - 1) begin
-        dht_send_bit(byte_value[i]);
+      for (k = 7; k >= 0; k = k - 1) begin
+        dht_send_bit(byte_value[k]);
       end
     end
   endtask
 
+  // DHT11 frame model (single transaction):
+  // wait host start sequence, send ACK, send 40-bit payload + checksum.
   task dht11_respond_once(
     input [7:0] hum_i,
     input [7:0] hum_d,
@@ -151,7 +211,7 @@ module tb_top;
         guard = guard + 1;
       end
       if (ioDht11Data !== 1'b0) begin
-        $display("top dht model timeout waiting host start low");
+        $display("FAIL: dht model timeout waiting host start low");
         $finish;
       end
 
@@ -161,7 +221,7 @@ module tb_top;
         guard = guard + 1;
       end
       if (ioDht11Data !== 1'b1) begin
-        $display("top dht model timeout waiting host release");
+        $display("FAIL: dht model timeout waiting host release");
         $finish;
       end
 
@@ -183,12 +243,51 @@ module tb_top;
     end
   endtask
 
-  reg [7:0] rTxCaptured;
-  integer dht_wait_timeout;
+  // UART TX monitor helper:
+  // waits until a sliding window on TX bytes matches token c0..c5 (by len).
+  task wait_tx_token;
+    input [7:0] c0;
+    input [7:0] c1;
+    input [7:0] c2;
+    input [7:0] c3;
+    input [7:0] c4;
+    input [7:0] c5;
+    input integer len;
+    reg [7:0] s0, s1, s2, s3, s4, s5;
+    reg found;
+    begin
+      s0 = 8'd0; s1 = 8'd0; s2 = 8'd0; s3 = 8'd0; s4 = 8'd0; s5 = 8'd0;
+      found = 1'b0;
+      while (!found) begin
+        @(evTxByte);
+        s0 = s1;
+        s1 = s2;
+        s2 = s3;
+        s3 = s4;
+        s4 = s5;
+        s5 = rTxLastByte;
+
+        if (len == 1) begin
+          found = (s5 == c0);
+        end else if (len == 2) begin
+          found = (s4 == c0) && (s5 == c1);
+        end else if (len == 3) begin
+          found = (s3 == c0) && (s4 == c1) && (s5 == c2);
+        end else if (len == 4) begin
+          found = (s2 == c0) && (s3 == c1) && (s4 == c2) && (s5 == c3);
+        end else if (len == 5) begin
+          found = (s1 == c0) && (s2 == c1) && (s3 == c2) && (s4 == c3) && (s5 == c4);
+        end else begin
+          found = (s0 == c0) && (s1 == c1) && (s2 == c2) && (s3 == c3) && (s4 == c4) && (s5 == c5);
+        end
+      end
+    end
+  endtask
+
   initial begin
-    // Global watchdog to avoid hang.
+    // Global watchdog
     #(150_000_000);
-    $display("tb_top_smoke global timeout");
+    $display("FAIL: tb_top global timeout");
     $finish;
   end
 
@@ -205,8 +304,14 @@ module tb_top;
         #(BIT_PERIOD_NS); rTxCaptured[5] = oTx;
         #(BIT_PERIOD_NS); rTxCaptured[6] = oTx;
         #(BIT_PERIOD_NS); rTxCaptured[7] = oTx;
-        #(BIT_PERIOD_NS); // stop bit
-        $display("[tb_top_smoke] TX byte: 0x%h ('%c')", rTxCaptured, rTxCaptured);
+        #(BIT_PERIOD_NS);
+
+        rTxLastByte = rTxCaptured;
+        if (rTxCount < 1024) rTxLog[rTxCount] = rTxCaptured;
+        rTxCount = rTxCount + 1;
+        -> evTxByte;
+
+        $display("[tb_top] TX byte[%0d]: 0x%02h (%c)", rTxCount - 1, rTxCaptured, rTxCaptured);
       end
     end
   end
@@ -214,11 +319,11 @@ module tb_top;
   initial begin
     iClk = 1'b0;
     iRst = 1'b1;
-    iRx  = 1'b1; // UART idle
+    iRx  = 1'b1;
 
-    iSw0 = 1'b1; // clock mode
-    iSw1 = 1'b1; // hour:min
-    iSw2 = 1'b0; // display watch
+    iSw0 = 1'b1;
+    iSw1 = 1'b1;
+    iSw2 = 1'b0;
     iSw3 = 1'b0;
 
     iBtnC = 1'b0;
@@ -229,73 +334,269 @@ module tb_top;
     iSr04Echo = 1'b0;
     rDht11DriveLow = 1'b0;
 
+    rTxCount = 0;
+    rTxLastByte = 8'd0;
+    for (i = 0; i < 1024; i = i + 1) begin
+      rTxLog[i] = 8'd0;
+    end
+
     repeat (10) @(posedge iClk);
     iRst = 1'b0;
+    repeat (20) @(posedge iClk);
 
-    // Clock mode and edit by UART (legacy-style serial stimulation)
-    send_uart_byte("1"); // clock mode
-    send_uart_byte("3"); // hour:min display
-    send_uart_byte("c"); // enter edit
-    send_uart_byte("u"); // increment
-    send_uart_byte("c"); // exit edit
+    // -----------------------------------------------------------------------
+    // Case2: physical stopwatch run/stop
+    // Goal:
+    // - Select watch/stopwatch path.
+    // - C press should toggle RUN then STOP.
+    // - Time value must advance while RUN.
+    // -----------------------------------------------------------------------
+    $display("CASE2 start: physical C -> stopwatch run/stop");
+    iSw0 = 1'b0;
+    iSw1 = 1'b0;
+    iSw2 = 1'b0;
+    iSw3 = 1'b0;
+    repeat (20) @(posedge iClk);
 
-    // Request watch report
-    send_uart_byte("w");
+    if (dut.wDisplaySelect !== 2'b00) begin
+      $display("FAIL CASE2: display select should be watch, got %b", dut.wDisplaySelect);
+      $finish;
+    end
 
-    // Switch to stopwatch mode and start/stop with physical + UART mix
-    send_uart_byte("0");
     press_button_c();
-    repeat (300000) @(posedge iClk);
-    send_uart_byte("c");
+    repeat (20) @(posedge iClk);
+    if (dut.u_watch_top.u_stopwatch.rCurState !== 2'd1) begin
+      $display("FAIL CASE2: stopwatch state should be RUN(1), got %0d", dut.u_watch_top.u_stopwatch.rCurState);
+      $finish;
+    end
 
-    // Select SR04 display and simulate one echo transaction.
-    // Unified policy: 'c/C' command is sensor start trigger.
+    repeat (2_500_000) @(posedge iClk);
+
+    press_button_c();
+    repeat (20) @(posedge iClk);
+    if (dut.u_watch_top.u_stopwatch.rCurState !== 2'd2) begin
+      $display("FAIL CASE2: stopwatch state should be STOP(2), got %0d", dut.u_watch_top.u_stopwatch.rCurState);
+      $finish;
+    end
+    if ((dut.u_watch_top.u_stopwatch.oSec == 7'd0) && (dut.u_watch_top.u_stopwatch.oCentisec == 7'd0)) begin
+      $display("FAIL CASE2: stopwatch time did not advance");
+      $finish;
+    end
+    $display("CASE2 pass");
+
+    // -----------------------------------------------------------------------
+    // Case3: physical clock edit (C/L/U/R/D/C)
+    // Goal:
+    // - Enter edit mode with C.
+    // - Move cursor with L/R.
+    // - Update minute/second with U/D.
+    // - Exit edit mode with C.
+    // -----------------------------------------------------------------------
+    $display("CASE3 start: physical clock edit flow");
+    iSw0 = 1'b1;
+    iSw1 = 1'b1;
+    iSw2 = 1'b0;
+    iSw3 = 1'b0;
+    repeat (20) @(posedge iClk);
+
+    press_button_c();
+    repeat (20) @(posedge iClk);
+    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd1) begin
+      $display("FAIL CASE3: edit state should be EDIT_SEC(1), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+      $finish;
+    end
+
+    press_button_l();
+    repeat (20) @(posedge iClk);
+    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd2) begin
+      $display("FAIL CASE3: edit state should be EDIT_MIN(2), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+      $finish;
+    end
+
+    rPrevMin = dut.u_watch_top.u_clock_core.oMin;
+    press_button_u();
+    repeat (20) @(posedge iClk);
+    if (rPrevMin == 59) rExpectedMin = 0;
+    else                rExpectedMin = rPrevMin + 1;
+    if (dut.u_watch_top.u_clock_core.oMin !== rExpectedMin[6:0]) begin
+      $display("FAIL CASE3: minute edit mismatch exp=%0d got=%0d", rExpectedMin, dut.u_watch_top.u_clock_core.oMin);
+      $finish;
+    end
+
+    press_button_r();
+    repeat (20) @(posedge iClk);
+    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd1) begin
+      $display("FAIL CASE3: edit state should return to EDIT_SEC(1), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+      $finish;
+    end
+
+    rPrevSec = dut.u_watch_top.u_clock_core.oSec;
+    press_button_d();
+    repeat (20) @(posedge iClk);
+    if (rPrevSec == 0) rExpectedSec = 59;
+    else               rExpectedSec = rPrevSec - 1;
+    if (dut.u_watch_top.u_clock_core.oSec !== rExpectedSec[6:0]) begin
+      $display("FAIL CASE3: second edit mismatch exp=%0d got=%0d", rExpectedSec, dut.u_watch_top.u_clock_core.oSec);
+      $finish;
+    end
+
+    press_button_c();
+    repeat (20) @(posedge iClk);
+    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd0) begin
+      $display("FAIL CASE3: should exit edit and return RUN(0), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+      $finish;
+    end
+    $display("CASE3 pass");
+
+    // -----------------------------------------------------------------------
+    // Case4: UART toggle policy
+    // Goal:
+    // - Verify decode/control toggle mapping for 0/3/5/6/x.
+    // - Confirm clear command x restores baseline switch behavior.
+    // -----------------------------------------------------------------------
+    $display("CASE4 start: uart toggle policy");
+    iSw0 = 1'b1;
+    iSw1 = 1'b1;
+    iSw2 = 1'b0;
+    iSw3 = 1'b0;
+    repeat (20) @(posedge iClk);
+
+    send_uart_byte("x");
+    repeat (20) @(posedge iClk);
+    if ((dut.wWatchMode !== 1'b1) || (dut.wWatchDisplay !== 1'b1) || (dut.wDisplaySelect !== 2'b00)) begin
+      $display("FAIL CASE4: clear toggle baseline mismatch");
+      $finish;
+    end
+
     send_uart_byte("5");
+    repeat (20) @(posedge iClk);
+    if (dut.wDisplaySelect !== 2'b01) begin
+      $display("FAIL CASE4: display should be SR04 after '5', got %b", dut.wDisplaySelect);
+      $finish;
+    end
+
+    send_uart_byte("6");
+    repeat (20) @(posedge iClk);
+    if (dut.wDisplaySelect !== 2'b10) begin
+      $display("FAIL CASE4: display should be DHT11 after '6', got %b", dut.wDisplaySelect);
+      $finish;
+    end
+
+    send_uart_byte("6");
+    repeat (20) @(posedge iClk);
+    if (dut.wDisplaySelect !== 2'b01) begin
+      $display("FAIL CASE4: display should return SR04 after second '6', got %b", dut.wDisplaySelect);
+      $finish;
+    end
+
+    send_uart_byte("0");
+    repeat (20) @(posedge iClk);
+    if (dut.wWatchMode !== 1'b0) begin
+      $display("FAIL CASE4: watch mode should toggle to stopwatch(0), got %b", dut.wWatchMode);
+      $finish;
+    end
+
+    send_uart_byte("3");
+    repeat (20) @(posedge iClk);
+    if (dut.wWatchDisplay !== 1'b0) begin
+      $display("FAIL CASE4: watch display should toggle to sec:cs(0), got %b", dut.wWatchDisplay);
+      $finish;
+    end
+
+    send_uart_byte("x");
+    repeat (20) @(posedge iClk);
+    if ((dut.wWatchMode !== 1'b1) || (dut.wWatchDisplay !== 1'b1) || (dut.wDisplaySelect !== 2'b00)) begin
+      $display("FAIL CASE4: clear toggle restore mismatch");
+      $finish;
+    end
+    $display("CASE4 pass");
+
+    // -----------------------------------------------------------------------
+    // Case5: UART watch report
+    // Goal:
+    // - Request watch report with 'w'.
+    // - Confirm "WATCH" token appears on TX stream.
+    // -----------------------------------------------------------------------
+    $display("CASE5 start: watch report token");
+    send_uart_byte("w");
+    wait_tx_token("W", "A", "T", "C", "H", 8'd0, 5);
+    $display("CASE5 pass");
+
+    // -----------------------------------------------------------------------
+    // Case6: SR04 select/start/report
+    // Goal:
+    // - Select SR04 display source.
+    // - Start measurement via 'c' and modeled echo.
+    // - Check measured distance range and report token "SR04 ".
+    // -----------------------------------------------------------------------
+    $display("CASE6 start: sr04 path");
+    send_uart_byte("5");
+    repeat (20) @(posedge iClk);
+    if (dut.wDisplaySelect !== 2'b01) begin
+      $display("FAIL CASE6: display should be SR04 before start, got %b", dut.wDisplaySelect);
+      $finish;
+    end
+
     fork
       simulate_sr04_echo_cm(25);
       send_uart_byte("c");
     join
-    send_uart_byte("s"); // sr04 report
 
-    // Select DHT11 display source and trigger by C command.
+    wait(dut.wSr04DistanceValid == 1'b1);
+    if ((dut.wSr04DistanceCm < 10'd24) || (dut.wSr04DistanceCm > 10'd26)) begin
+      $display("FAIL CASE6: sr04 distance out of range, got %0d", dut.wSr04DistanceCm);
+      $finish;
+    end
+
+    send_uart_byte("s");
+    wait_tx_token("S", "R", "0", "4", " ", 8'd0, 5);
+    $display("CASE6 pass");
+
+    // -----------------------------------------------------------------------
+    // Case7: DHT11 select/start/report
+    // Goal:
+    // - Select DHT11 display source.
+    // - Start measurement via 'c' and modeled DHT11 response.
+    // - Check data value and report tokens "TEMP " / "HUM ".
+    // -----------------------------------------------------------------------
+    $display("CASE7 start: dht11 path");
     send_uart_byte("6");
+    repeat (20) @(posedge iClk);
+    if (dut.wDisplaySelect !== 2'b10) begin
+      $display("FAIL CASE7: display should be DHT11 before start, got %b", dut.wDisplaySelect);
+      $finish;
+    end
+
     fork
       begin
         dht11_respond_once(8'd44, 8'd0, 8'd23, 8'd0);
       end
       begin
         send_uart_byte("c");
-        press_button_c();
       end
     join
-    dht_wait_timeout = 0;
-    while ((dut.wDhtDataValid !== 1'b1) && (dht_wait_timeout < WAIT_GUARD_CYC)) begin
-      @(posedge iClk);
-      dht_wait_timeout = dht_wait_timeout + 1;
-    end
-    if (dut.wDhtDataValid !== 1'b1) begin
-      $display("top dht data_valid timeout");
-      $finish;
-    end
-    if (dut.wDhtHumInt  !== 8'd44) begin
-      $display("top dht humidity mismatch: %0d", dut.wDhtHumInt);
+
+    wait(dut.wDhtDataValid == 1'b1);
+    if (dut.wDhtHumInt !== 8'd44) begin
+      $display("FAIL CASE7: humidity mismatch, got %0d", dut.wDhtHumInt);
       $finish;
     end
     if (dut.wDhtTempInt !== 8'd23) begin
-      $display("top dht temperature mismatch: %0d", dut.wDhtTempInt);
-      $finish;
-    end
-    if (dut.wDisplaySelect !== 2'b10) begin
-      $display("top display select should stay at dht11");
+      $display("FAIL CASE7: temperature mismatch, got %0d", dut.wDhtTempInt);
       $finish;
     end
 
-    // DHT11 report requests over UART.
     send_uart_byte("t");
-    send_uart_byte("h");
+    wait_tx_token("T", "E", "M", "P", " ", 8'd0, 5);
 
-    $display("tb_top_smoke finished");
+    send_uart_byte("h");
+    wait_tx_token("H", "U", "M", " ", 8'd0, 8'd0, 4);
+    $display("CASE7 pass");
+
+    $display("tb_top finished: cases 2~7 passed, tx_count=%0d", rTxCount);
     $finish;
   end
 
 endmodule
+
+

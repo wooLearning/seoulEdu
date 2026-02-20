@@ -10,7 +10,7 @@ Scenario:
 CheckPoint:
   - verifies Mode switching logic (Clock vs Stopwatch)
   - Verifies Display routing (Watch vs SR04 vs DHT11)
-  - Checks priority logic for sensor trigger signals
+  - Verifies sensor trigger routing (SR04/DHT11)
 [TB_INFO_END]
 */
 
@@ -35,16 +35,6 @@ module tb_control_unit;
   wire [1:0] oDisplaySelect;
   wire oBtnC, oBtnU, oBtnD, oBtnL, oBtnR;
   wire oReqWatchRpt, oReqSr04Rpt, oReqTempRpt, oReqHumRpt, oSr04Start, oDht11Start;
-
-  function [1:0] f_disp_sel_from_sw;
-    input sw2;
-    input sw3;
-    begin
-      if (!sw2)       f_disp_sel_from_sw = 2'b00;
-      else if (!sw3)  f_disp_sel_from_sw = 2'b01;
-      else            f_disp_sel_from_sw = 2'b10;
-    end
-  endfunction
 
   control_unit dut (
     .iClk(iClk),
@@ -184,7 +174,7 @@ module tb_control_unit;
       $display("oWatchDisplay default mismatch");
       $finish;
     end
-    if (oDisplaySelect !== f_disp_sel_from_sw(iSw2, iSw3)) begin
+    if (oDisplaySelect !== ((!iSw2) ? 2'b00 : ((!iSw3) ? 2'b01 : 2'b10))) begin
       $display("oDisplaySelect default mismatch");
       $finish;
     end
@@ -221,6 +211,42 @@ module tb_control_unit;
       $finish;
     end
 
+    // Button merge check (separate path check, no simultaneous assert).
+    @(posedge iClk);
+    iDecBtnU  <= 1'b1;
+    #1;
+    if (oBtnU !== 1'b1) begin
+      $display("oBtnU decoder path mismatch");
+      $finish;
+    end
+    @(posedge iClk);
+    iDecBtnU  <= 1'b0;
+
+    @(posedge iClk);
+    iPhysBtnC <= 1'b1;
+    #1;
+    if (oBtnC !== 1'b1) begin
+      $display("oBtnC physical path mismatch");
+      $finish;
+    end
+    @(posedge iClk);
+    iPhysBtnC <= 1'b0;
+
+    // Trigger route check in sr04 display.
+    @(posedge iClk);
+    iDecBtnC <= 1'b1;
+    #1;
+    if (oSr04Start !== 1'b1) begin
+      $display("sr04 start should assert in sr04 display");
+      $finish;
+    end
+    if (oDht11Start !== 1'b0) begin
+      $display("dht11 start should stay low in sr04 display");
+      $finish;
+    end
+    @(posedge iClk);
+    iDecBtnC <= 1'b0;
+
     // Toggle sw3 once: sr04 -> dht11.
     pulse_tgl_sw3();
     #1;
@@ -228,23 +254,6 @@ module tb_control_unit;
       $display("oDisplaySelect sw3-toggle mismatch");
       $finish;
     end
-
-    // Button OR merge check.
-    @(posedge iClk);
-    iPhysBtnC <= 1'b1;
-    iDecBtnU  <= 1'b1;
-    #1;
-    if (oBtnC !== 1'b1) begin
-      $display("oBtnC OR merge mismatch");
-      $finish;
-    end
-    if (oBtnU !== 1'b1) begin
-      $display("oBtnU OR merge mismatch");
-      $finish;
-    end
-    @(posedge iClk);
-    iPhysBtnC <= 1'b0;
-    iDecBtnU  <= 1'b0;
 
     // Trigger route check in dht11 display.
     @(posedge iClk);
@@ -286,7 +295,7 @@ module tb_control_unit;
       $display("oWatchDisplay clear mismatch");
       $finish;
     end
-    if (oDisplaySelect !== f_disp_sel_from_sw(iSw2, iSw3)) begin
+    if (oDisplaySelect !== ((!iSw2) ? 2'b00 : ((!iSw3) ? 2'b01 : 2'b10))) begin
       $display("oDisplaySelect clear mismatch");
       $finish;
     end

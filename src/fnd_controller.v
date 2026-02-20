@@ -115,6 +115,3 @@ assign oFndCom  = rFndCom;
 assign oFndFont = (rFndSel == 2'b10) ? (rFndFont & 8'h7F) : rFndFont;
 
 endmodule
-
-
-

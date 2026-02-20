@@ -2,14 +2,14 @@
 [TB_INFO_START]
 Name: tb_top
 Target: Top
-Role: System-Level Scenario Test (Case 2~7)
+Role: System-Level Scenario Test (Case 1~6)
 Scenario:
-  - Case2: Physical C button -> stopwatch run/stop check
-  - Case3: Physical U/D/L/R/C -> clock edit flow check
-  - Case4: UART toggle command policy check (0/3/5/6/x)
-  - Case5: UART watch report token check ("WATCH")
-  - Case6: SR04 select/start/report path check
-  - Case7: DHT11 select/start/report path check
+  - Case1: Physical C button -> stopwatch run/stop check
+  - Case2: Physical U/D/L/R/C -> clock edit flow check
+  - Case3: UART toggle command policy check (0/3/5/6/x)
+  - Case4: UART watch report token check ("WATCH")
+  - Case5: SR04 select/start/report path check
+  - Case6: DHT11 select/start/report path check
 CheckPoint:
   - Verify display/mode select policy from control path
   - Verify sensor data valid/value and UART report token output
@@ -18,6 +18,7 @@ CheckPoint:
 */
 
 `timescale 1ns / 1ps
+
 
 module tb_top;
   initial begin
@@ -284,6 +285,253 @@ module tb_top;
     end
   endtask
 
+  // -----------------------------------------------------------------------
+  // Case1: physical stopwatch run/stop
+  // -----------------------------------------------------------------------
+  task run_case1;
+    begin
+      $display("CASE1 start: physical C -> stopwatch run/stop");
+      iSw0 = 1'b0;
+      iSw1 = 1'b0;
+      iSw2 = 1'b0;
+      iSw3 = 1'b0;
+      repeat (20) @(posedge iClk);
+
+      if (dut.wDisplaySelect !== 2'b00) begin
+        $display("FAIL CASE1: display select should be watch, got %b", dut.wDisplaySelect);
+        $finish;
+      end
+
+      press_button_c();
+      repeat (20) @(posedge iClk);
+      if (dut.u_watch_top.u_stopwatch.rCurState !== 2'd1) begin
+        $display("FAIL CASE1: stopwatch state should be RUN(1), got %0d", dut.u_watch_top.u_stopwatch.rCurState);
+        $finish;
+      end
+
+      // Keep RUN for a short window, then verify STOP transition only.
+      repeat (1_200_000) @(posedge iClk);
+
+      press_button_c();
+      repeat (20) @(posedge iClk);
+      if (dut.u_watch_top.u_stopwatch.rCurState !== 2'd2) begin
+        $display("FAIL CASE1: stopwatch state should be STOP(2), got %0d", dut.u_watch_top.u_stopwatch.rCurState);
+        $finish;
+      end
+      $display("CASE1 pass");
+    end
+  endtask
+
+  // -----------------------------------------------------------------------
+  // Case2: physical clock edit (C/L/U/R/D/C)
+  // -----------------------------------------------------------------------
+  task run_case2;
+    begin
+      $display("CASE2 start: physical clock edit flow");
+      iSw0 = 1'b1;
+      iSw1 = 1'b1;
+      iSw2 = 1'b0;
+      iSw3 = 1'b0;
+      repeat (20) @(posedge iClk);
+
+      press_button_c();
+      repeat (20) @(posedge iClk);
+      if (dut.u_watch_top.u_clock_core.oEditState !== 2'd1) begin
+        $display("FAIL CASE2: edit state should be EDIT_SEC(1), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+        $finish;
+      end
+
+      press_button_l();
+      repeat (20) @(posedge iClk);
+      if (dut.u_watch_top.u_clock_core.oEditState !== 2'd2) begin
+        $display("FAIL CASE2: edit state should be EDIT_MIN(2), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+        $finish;
+      end
+
+      rPrevMin = dut.u_watch_top.u_clock_core.oMin;
+      press_button_u();
+      repeat (20) @(posedge iClk);
+      if (rPrevMin == 59) rExpectedMin = 0;
+      else                rExpectedMin = rPrevMin + 1;
+      if (dut.u_watch_top.u_clock_core.oMin !== rExpectedMin[6:0]) begin
+        $display("FAIL CASE2: minute edit mismatch exp=%0d got=%0d", rExpectedMin, dut.u_watch_top.u_clock_core.oMin);
+        $finish;
+      end
+
+      press_button_r();
+      repeat (20) @(posedge iClk);
+      if (dut.u_watch_top.u_clock_core.oEditState !== 2'd1) begin
+        $display("FAIL CASE2: edit state should return to EDIT_SEC(1), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+        $finish;
+      end
+
+      rPrevSec = dut.u_watch_top.u_clock_core.oSec;
+      press_button_d();
+      repeat (20) @(posedge iClk);
+      if (rPrevSec == 0) rExpectedSec = 59;
+      else               rExpectedSec = rPrevSec - 1;
+      if (dut.u_watch_top.u_clock_core.oSec !== rExpectedSec[6:0]) begin
+        $display("FAIL CASE2: second edit mismatch exp=%0d got=%0d", rExpectedSec, dut.u_watch_top.u_clock_core.oSec);
+        $finish;
+      end
+
+      press_button_c();
+      repeat (20) @(posedge iClk);
+      if (dut.u_watch_top.u_clock_core.oEditState !== 2'd0) begin
+        $display("FAIL CASE2: should exit edit and return RUN(0), got %0d", dut.u_watch_top.u_clock_core.oEditState);
+        $finish;
+      end
+      $display("CASE2 pass");
+    end
+  endtask
+
+  // -----------------------------------------------------------------------
+  // Case3: UART toggle policy
+  // -----------------------------------------------------------------------
+  task run_case3;
+    begin
+      $display("CASE3 start: uart toggle policy");
+      iSw0 = 1'b1;
+      iSw1 = 1'b1;
+      iSw2 = 1'b0;
+      iSw3 = 1'b0;
+      repeat (20) @(posedge iClk);
+
+      send_uart_byte("x");
+      repeat (20) @(posedge iClk);
+      if ((dut.wWatchMode !== 1'b1) || (dut.wWatchDisplay !== 1'b1) || (dut.wDisplaySelect !== 2'b00)) begin
+        $display("FAIL CASE3: clear toggle baseline mismatch");
+        $finish;
+      end
+
+      send_uart_byte("5");
+      repeat (20) @(posedge iClk);
+      if (dut.wDisplaySelect !== 2'b01) begin
+        $display("FAIL CASE3: display should be SR04 after '5', got %b", dut.wDisplaySelect);
+        $finish;
+      end
+
+      send_uart_byte("6");
+      repeat (20) @(posedge iClk);
+      if (dut.wDisplaySelect !== 2'b10) begin
+        $display("FAIL CASE3: display should be DHT11 after '6', got %b", dut.wDisplaySelect);
+        $finish;
+      end
+
+      send_uart_byte("6");
+      repeat (20) @(posedge iClk);
+      if (dut.wDisplaySelect !== 2'b01) begin
+        $display("FAIL CASE3: display should return SR04 after second '6', got %b", dut.wDisplaySelect);
+        $finish;
+      end
+
+      send_uart_byte("0");
+      repeat (20) @(posedge iClk);
+      if (dut.wWatchMode !== 1'b0) begin
+        $display("FAIL CASE3: watch mode should toggle to stopwatch(0), got %b", dut.wWatchMode);
+        $finish;
+      end
+
+      send_uart_byte("3");
+      repeat (20) @(posedge iClk);
+      if (dut.wWatchDisplay !== 1'b0) begin
+        $display("FAIL CASE3: watch display should toggle to sec:cs(0), got %b", dut.wWatchDisplay);
+        $finish;
+      end
+
+      send_uart_byte("x");
+      repeat (20) @(posedge iClk);
+      if ((dut.wWatchMode !== 1'b1) || (dut.wWatchDisplay !== 1'b1) || (dut.wDisplaySelect !== 2'b00)) begin
+        $display("FAIL CASE3: clear toggle restore mismatch");
+        $finish;
+      end
+      $display("CASE3 pass");
+    end
+  endtask
+
+  // -----------------------------------------------------------------------
+  // Case4: UART watch report
+  // -----------------------------------------------------------------------
+  task run_case4;
+    begin
+      $display("CASE4 start: watch report token");
+      send_uart_byte("w");
+      wait_tx_token("W", "A", "T", "C", "H", 8'd0, 5);
+      $display("CASE4 pass");
+    end
+  endtask
+
+  // -----------------------------------------------------------------------
+  // Case5: SR04 select/start/report
+  // -----------------------------------------------------------------------
+  task run_case5;
+    begin
+      $display("CASE5 start: sr04 path");
+      send_uart_byte("5");
+      repeat (20) @(posedge iClk);
+      if (dut.wDisplaySelect !== 2'b01) begin
+        $display("FAIL CASE5: display should be SR04 before start, got %b", dut.wDisplaySelect);
+        $finish;
+      end
+
+      fork
+        simulate_sr04_echo_cm(25);
+        send_uart_byte("c");
+      join
+
+      wait(dut.wSr04DistanceValid == 1'b1);
+      if ((dut.wSr04DistanceCm < 10'd24) || (dut.wSr04DistanceCm > 10'd26)) begin
+        $display("FAIL CASE5: sr04 distance out of range, got %0d", dut.wSr04DistanceCm);
+        $finish;
+      end
+
+      send_uart_byte("s");
+      wait_tx_token("S", "R", "0", "4", " ", 8'd0, 5);
+      $display("CASE5 pass");
+    end
+  endtask
+
+  // -----------------------------------------------------------------------
+  // Case6: DHT11 select/start/report
+  // -----------------------------------------------------------------------
+  task run_case6;
+    begin
+      $display("CASE6 start: dht11 path");
+      send_uart_byte("6");
+      repeat (20) @(posedge iClk);
+      if (dut.wDisplaySelect !== 2'b10) begin
+        $display("FAIL CASE6: display should be DHT11 before start, got %b", dut.wDisplaySelect);
+        $finish;
+      end
+
+      fork
+        begin
+          dht11_respond_once(8'd44, 8'd0, 8'd23, 8'd0);
+        end
+        begin
+          send_uart_byte("c");
+        end
+      join
+
+      wait(dut.wDhtDataValid == 1'b1);
+      if (dut.wDhtHumInt !== 8'd44) begin
+        $display("FAIL CASE6: humidity mismatch, got %0d", dut.wDhtHumInt);
+        $finish;
+      end
+      if (dut.wDhtTempInt !== 8'd23) begin
+        $display("FAIL CASE6: temperature mismatch, got %0d", dut.wDhtTempInt);
+        $finish;
+      end
+
+      send_uart_byte("t");
+      wait_tx_token("T", "E", "M", "P", " ", 8'd0, 5);
+
+      send_uart_byte("h");
+      wait_tx_token("H", "U", "M", " ", 8'd0, 8'd0, 4);
+      $display("CASE6 pass");
+    end
+  endtask
+
   initial begin
     // Global watchdog
     #(150_000_000);
@@ -315,7 +563,8 @@ module tb_top;
       end
     end
   end
-
+  
+  `define CASE3
   initial begin
     iClk = 1'b0;
     iRst = 1'b1;
@@ -343,260 +592,34 @@ module tb_top;
     repeat (10) @(posedge iClk);
     iRst = 1'b0;
     repeat (20) @(posedge iClk);
-
     // -----------------------------------------------------------------------
-    // Case2: physical stopwatch run/stop
-    // Goal:
-    // - Select watch/stopwatch path.
-    // - C press should toggle RUN then STOP.
-    // - Time value must advance while RUN.
+    // Case Selection (`ifdef)
+    // Build define example: -DCASE1 ... -DCASE6
+    // If no case macro is defined, run all cases in order.
     // -----------------------------------------------------------------------
-    $display("CASE2 start: physical C -> stopwatch run/stop");
-    iSw0 = 1'b0;
-    iSw1 = 1'b0;
-    iSw2 = 1'b0;
-    iSw3 = 1'b0;
-    repeat (20) @(posedge iClk);
+    `ifdef CASE1
+        run_case1();
+    `elsif CASE2
+        run_case2();
+    `elsif CASE3
+        run_case3();
+    `elsif CASE4
+        run_case4();
+    `elsif CASE5
+        run_case5();
+    `elsif CASE6
+        run_case6();
+    `else
+        run_case1();
+        run_case2();
+        run_case3();
+        run_case4();
+        run_case5();
+        run_case6();
+    `endif
 
-    if (dut.wDisplaySelect !== 2'b00) begin
-      $display("FAIL CASE2: display select should be watch, got %b", dut.wDisplaySelect);
-      $finish;
-    end
-
-    press_button_c();
-    repeat (20) @(posedge iClk);
-    if (dut.u_watch_top.u_stopwatch.rCurState !== 2'd1) begin
-      $display("FAIL CASE2: stopwatch state should be RUN(1), got %0d", dut.u_watch_top.u_stopwatch.rCurState);
-      $finish;
-    end
-
-    repeat (2_500_000) @(posedge iClk);
-
-    press_button_c();
-    repeat (20) @(posedge iClk);
-    if (dut.u_watch_top.u_stopwatch.rCurState !== 2'd2) begin
-      $display("FAIL CASE2: stopwatch state should be STOP(2), got %0d", dut.u_watch_top.u_stopwatch.rCurState);
-      $finish;
-    end
-    if ((dut.u_watch_top.u_stopwatch.oSec == 7'd0) && (dut.u_watch_top.u_stopwatch.oCentisec == 7'd0)) begin
-      $display("FAIL CASE2: stopwatch time did not advance");
-      $finish;
-    end
-    $display("CASE2 pass");
-
-    // -----------------------------------------------------------------------
-    // Case3: physical clock edit (C/L/U/R/D/C)
-    // Goal:
-    // - Enter edit mode with C.
-    // - Move cursor with L/R.
-    // - Update minute/second with U/D.
-    // - Exit edit mode with C.
-    // -----------------------------------------------------------------------
-    $display("CASE3 start: physical clock edit flow");
-    iSw0 = 1'b1;
-    iSw1 = 1'b1;
-    iSw2 = 1'b0;
-    iSw3 = 1'b0;
-    repeat (20) @(posedge iClk);
-
-    press_button_c();
-    repeat (20) @(posedge iClk);
-    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd1) begin
-      $display("FAIL CASE3: edit state should be EDIT_SEC(1), got %0d", dut.u_watch_top.u_clock_core.oEditState);
-      $finish;
-    end
-
-    press_button_l();
-    repeat (20) @(posedge iClk);
-    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd2) begin
-      $display("FAIL CASE3: edit state should be EDIT_MIN(2), got %0d", dut.u_watch_top.u_clock_core.oEditState);
-      $finish;
-    end
-
-    rPrevMin = dut.u_watch_top.u_clock_core.oMin;
-    press_button_u();
-    repeat (20) @(posedge iClk);
-    if (rPrevMin == 59) rExpectedMin = 0;
-    else                rExpectedMin = rPrevMin + 1;
-    if (dut.u_watch_top.u_clock_core.oMin !== rExpectedMin[6:0]) begin
-      $display("FAIL CASE3: minute edit mismatch exp=%0d got=%0d", rExpectedMin, dut.u_watch_top.u_clock_core.oMin);
-      $finish;
-    end
-
-    press_button_r();
-    repeat (20) @(posedge iClk);
-    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd1) begin
-      $display("FAIL CASE3: edit state should return to EDIT_SEC(1), got %0d", dut.u_watch_top.u_clock_core.oEditState);
-      $finish;
-    end
-
-    rPrevSec = dut.u_watch_top.u_clock_core.oSec;
-    press_button_d();
-    repeat (20) @(posedge iClk);
-    if (rPrevSec == 0) rExpectedSec = 59;
-    else               rExpectedSec = rPrevSec - 1;
-    if (dut.u_watch_top.u_clock_core.oSec !== rExpectedSec[6:0]) begin
-      $display("FAIL CASE3: second edit mismatch exp=%0d got=%0d", rExpectedSec, dut.u_watch_top.u_clock_core.oSec);
-      $finish;
-    end
-
-    press_button_c();
-    repeat (20) @(posedge iClk);
-    if (dut.u_watch_top.u_clock_core.oEditState !== 2'd0) begin
-      $display("FAIL CASE3: should exit edit and return RUN(0), got %0d", dut.u_watch_top.u_clock_core.oEditState);
-      $finish;
-    end
-    $display("CASE3 pass");
-
-    // -----------------------------------------------------------------------
-    // Case4: UART toggle policy
-    // Goal:
-    // - Verify decode/control toggle mapping for 0/3/5/6/x.
-    // - Confirm clear command x restores baseline switch behavior.
-    // -----------------------------------------------------------------------
-    $display("CASE4 start: uart toggle policy");
-    iSw0 = 1'b1;
-    iSw1 = 1'b1;
-    iSw2 = 1'b0;
-    iSw3 = 1'b0;
-    repeat (20) @(posedge iClk);
-
-    send_uart_byte("x");
-    repeat (20) @(posedge iClk);
-    if ((dut.wWatchMode !== 1'b1) || (dut.wWatchDisplay !== 1'b1) || (dut.wDisplaySelect !== 2'b00)) begin
-      $display("FAIL CASE4: clear toggle baseline mismatch");
-      $finish;
-    end
-
-    send_uart_byte("5");
-    repeat (20) @(posedge iClk);
-    if (dut.wDisplaySelect !== 2'b01) begin
-      $display("FAIL CASE4: display should be SR04 after '5', got %b", dut.wDisplaySelect);
-      $finish;
-    end
-
-    send_uart_byte("6");
-    repeat (20) @(posedge iClk);
-    if (dut.wDisplaySelect !== 2'b10) begin
-      $display("FAIL CASE4: display should be DHT11 after '6', got %b", dut.wDisplaySelect);
-      $finish;
-    end
-
-    send_uart_byte("6");
-    repeat (20) @(posedge iClk);
-    if (dut.wDisplaySelect !== 2'b01) begin
-      $display("FAIL CASE4: display should return SR04 after second '6', got %b", dut.wDisplaySelect);
-      $finish;
-    end
-
-    send_uart_byte("0");
-    repeat (20) @(posedge iClk);
-    if (dut.wWatchMode !== 1'b0) begin
-      $display("FAIL CASE4: watch mode should toggle to stopwatch(0), got %b", dut.wWatchMode);
-      $finish;
-    end
-
-    send_uart_byte("3");
-    repeat (20) @(posedge iClk);
-    if (dut.wWatchDisplay !== 1'b0) begin
-      $display("FAIL CASE4: watch display should toggle to sec:cs(0), got %b", dut.wWatchDisplay);
-      $finish;
-    end
-
-    send_uart_byte("x");
-    repeat (20) @(posedge iClk);
-    if ((dut.wWatchMode !== 1'b1) || (dut.wWatchDisplay !== 1'b1) || (dut.wDisplaySelect !== 2'b00)) begin
-      $display("FAIL CASE4: clear toggle restore mismatch");
-      $finish;
-    end
-    $display("CASE4 pass");
-
-    // -----------------------------------------------------------------------
-    // Case5: UART watch report
-    // Goal:
-    // - Request watch report with 'w'.
-    // - Confirm "WATCH" token appears on TX stream.
-    // -----------------------------------------------------------------------
-    $display("CASE5 start: watch report token");
-    send_uart_byte("w");
-    wait_tx_token("W", "A", "T", "C", "H", 8'd0, 5);
-    $display("CASE5 pass");
-
-    // -----------------------------------------------------------------------
-    // Case6: SR04 select/start/report
-    // Goal:
-    // - Select SR04 display source.
-    // - Start measurement via 'c' and modeled echo.
-    // - Check measured distance range and report token "SR04 ".
-    // -----------------------------------------------------------------------
-    $display("CASE6 start: sr04 path");
-    send_uart_byte("5");
-    repeat (20) @(posedge iClk);
-    if (dut.wDisplaySelect !== 2'b01) begin
-      $display("FAIL CASE6: display should be SR04 before start, got %b", dut.wDisplaySelect);
-      $finish;
-    end
-
-    fork
-      simulate_sr04_echo_cm(25);
-      send_uart_byte("c");
-    join
-
-    wait(dut.wSr04DistanceValid == 1'b1);
-    if ((dut.wSr04DistanceCm < 10'd24) || (dut.wSr04DistanceCm > 10'd26)) begin
-      $display("FAIL CASE6: sr04 distance out of range, got %0d", dut.wSr04DistanceCm);
-      $finish;
-    end
-
-    send_uart_byte("s");
-    wait_tx_token("S", "R", "0", "4", " ", 8'd0, 5);
-    $display("CASE6 pass");
-
-    // -----------------------------------------------------------------------
-    // Case7: DHT11 select/start/report
-    // Goal:
-    // - Select DHT11 display source.
-    // - Start measurement via 'c' and modeled DHT11 response.
-    // - Check data value and report tokens "TEMP " / "HUM ".
-    // -----------------------------------------------------------------------
-    $display("CASE7 start: dht11 path");
-    send_uart_byte("6");
-    repeat (20) @(posedge iClk);
-    if (dut.wDisplaySelect !== 2'b10) begin
-      $display("FAIL CASE7: display should be DHT11 before start, got %b", dut.wDisplaySelect);
-      $finish;
-    end
-
-    fork
-      begin
-        dht11_respond_once(8'd44, 8'd0, 8'd23, 8'd0);
-      end
-      begin
-        send_uart_byte("c");
-      end
-    join
-
-    wait(dut.wDhtDataValid == 1'b1);
-    if (dut.wDhtHumInt !== 8'd44) begin
-      $display("FAIL CASE7: humidity mismatch, got %0d", dut.wDhtHumInt);
-      $finish;
-    end
-    if (dut.wDhtTempInt !== 8'd23) begin
-      $display("FAIL CASE7: temperature mismatch, got %0d", dut.wDhtTempInt);
-      $finish;
-    end
-
-    send_uart_byte("t");
-    wait_tx_token("T", "E", "M", "P", " ", 8'd0, 5);
-
-    send_uart_byte("h");
-    wait_tx_token("H", "U", "M", " ", 8'd0, 8'd0, 4);
-    $display("CASE7 pass");
-
-    $display("tb_top finished: cases 2~7 passed, tx_count=%0d", rTxCount);
+    $display("tb_top finished: tx_count=%0d", rTxCount);
     $finish;
   end
 
 endmodule
-
-

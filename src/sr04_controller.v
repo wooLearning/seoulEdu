@@ -74,13 +74,13 @@ module sr04_controller #(
       end
 
       START: begin
-        if (rTrigCnt >= TRIG_US - 1) rNxtState = WAIT_ECHO;
+        if (rTrigCnt > TRIG_US ) rNxtState = WAIT_ECHO; //트리거us 10us para선언
         else                           rNxtState = START;
       end
 
       WAIT_ECHO: begin
         if (rEchoSync2)                             rNxtState = MEASURE;
-        else if (rStepUsCnt >= WAIT_ECHO_TIMEOUT_US) rNxtState = IDLE;
+        else if (rStepUsCnt >= WAIT_ECHO_TIMEOUT_US) rNxtState = IDLE; //30000카운트했는데 
         else                                        rNxtState = WAIT_ECHO;
       end
 
@@ -95,6 +95,7 @@ module sr04_controller #(
       default: rNxtState = IDLE;
     endcase
   end
+
 
   always @(posedge iClk or posedge iRst) begin
     if (iRst) rCurState <= IDLE;
@@ -133,6 +134,7 @@ module sr04_controller #(
             rEchoUsCnt <= 32'd0;
             rCnt58us <= 6'd0;
             rDist <= 10'd0;
+            rTrigCnt<=1'b0;
           end 
           else if (iTickUs) begin
             rTrigCnt <= rTrigCnt + 1'b1;
@@ -141,7 +143,7 @@ module sr04_controller #(
 
         WAIT_ECHO: begin
           oTrig <= 1'b0;
-
+          
           if (rNxtState == MEASURE) begin
             rStepUsCnt <= 32'd0;
             rEchoUsCnt <= 32'd0;

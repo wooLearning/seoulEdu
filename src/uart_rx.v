@@ -40,7 +40,7 @@ module uart_rx (
   reg       rValid;
 
   // Synchronizers
-  reg rRxSync1, rRxSync2;
+  reg  rRxSync1, rRxSync2;
   wire wRxSynced;
 
   // Input Synchronization
@@ -104,7 +104,8 @@ module uart_rx (
       rBitCnt  <= 0;
       rTickCnt <= 0;
       rValid   <= 1'b0;
-    end else begin
+    end 
+    else begin
       
       // Default: Valid pulse lasts only 1 cycle (when set)
       rValid <= 1'b0; 
@@ -159,6 +160,7 @@ module uart_rx (
   assign oData     = rData;
   assign oValid    = rValid;
   assign wRxSynced = rRxSync2;
+  assign wRxOk     = ~rRxSync1 && rRxSync2;
 
 endmodule
 

@@ -270,15 +270,20 @@ module tb_top;
 
         if (len == 1) begin
           found = (s5 == c0);
-        end else if (len == 2) begin
+        end 
+        else if (len == 2) begin
           found = (s4 == c0) && (s5 == c1);
-        end else if (len == 3) begin
+        end 
+        else if (len == 3) begin
           found = (s3 == c0) && (s4 == c1) && (s5 == c2);
-        end else if (len == 4) begin
+        end 
+        else if (len == 4) begin
           found = (s2 == c0) && (s3 == c1) && (s4 == c2) && (s5 == c3);
-        end else if (len == 5) begin
+        end 
+        else if (len == 5) begin
           found = (s1 == c0) && (s2 == c1) && (s3 == c2) && (s4 == c3) && (s5 == c4);
-        end else begin
+        end 
+        else begin
           found = (s0 == c0) && (s1 == c1) && (s2 == c2) && (s3 == c3) && (s4 == c4) && (s5 == c5);
         end
       end
@@ -510,7 +515,7 @@ module tb_top;
         end
         begin
           send_uart_byte("c");
-        end
+        end 
       join
 
       wait(dut.wDhtDataValid == 1'b1);
@@ -564,7 +569,7 @@ module tb_top;
     end
   end
   
-  `define CASE3
+  `define CASE6
   initial begin
     iClk = 1'b0;
     iRst = 1'b1;
@@ -608,6 +613,7 @@ module tb_top;
     `elsif CASE5
         run_case5();
     `elsif CASE6
+        send_uart_byte("5");//if case6 run alone
         run_case6();
     `else
         run_case1();
@@ -618,7 +624,7 @@ module tb_top;
         run_case6();
     `endif
 
-    $display("tb_top finished: tx_count=%0d", rTxCount);
+    //$display("tb_top finished: tx_count=%0d", rTxCount);
     $finish;
   end
 

@@ -22,7 +22,7 @@ StateDescription:
 `timescale 1ns / 1ps
 
 module dht11_controller #(
-  parameter integer START_LOW_MS      = 18,
+  parameter integer START_LOW_MS      = 19,
   parameter integer START_RELEASE_US  = 30,
   parameter integer RESP_TIMEOUT_US   = 200,
   parameter integer BIT_TIMEOUT_US    = 120,
@@ -226,11 +226,6 @@ module dht11_controller #(
           oHumInt    <= wHumIntField;
           oTempInt   <= wTempIntField;
           oDataValid <= 1'b1;
-        end
-        else begin  
-          oHumInt    <= 0;
-          oTempInt   <= 0;
-          oDataValid <= 1'b0;
         end
       end
     end
